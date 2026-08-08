@@ -1,0 +1,145 @@
+Смотри, какой эффект я обнаружил.
+
+Беру твой датасет, который ты мне сгенерировала про кабели. И представляю себе следующую ситуацию. Я — на производстве. Мне нужно автоматически разделять партию кабелей на две категории (обе не брак, но свойства разные). У меня есть размеченные данные: вот этот самый датафрейм с нулями и единицами в последнем столбце. Они были размечены черт знает когда — год назад, или два года. Короче, новых размеченных данных у меня нет. Я для каждой партии кабелей пользуюсь старыми.
+
+То есть, у меня есть обучающая выборка — это весь датасет. А для тестирования я, зная, что у меня на производстве первая линия (та, которая производит плотное облако точек, закодированных как 1) допускает сильные колебания в первой переменной (±200 при среднем значении предиктора = 4000  и std ≈ 1500), выполняю случайные сдвиги всего облака единиц как целого на какой-то случайный вектор (a, b) средним 0 и std=200. Облако нулей при этом остается на месте (линия, которая выпускает нули не лажает) и таргет — тоже остается прежним.
+
+Вот. И таким образом, зная такую особенность своей первой линии, я пытаюсь нивелировать ее колебания в своей модели. Для это я сравниваю две модели:
+
+1) малое число соседей и равноправное голосование,
+2) большое число соседей и взвешенное голосование.
+
+Я пытался обнаружить высокий разброс accuracy у первой модели по сравнению со второй, где, как я предполагал, разброс будет меньше. Но все получилось не так. Никакого выигрыша в разбросе взвешенное голосование на большом числе соседей не дает. А дает мощнейший выигрыш в скоре на test'е.
+
+Вот код.
+
+```python
+np.random.seed(42)
+
+df = pd.read_csv('data/cable.csv')
+display(df)
+df = df.rename(columns = {'insulation_resistance': 'x1', 'capacitance_imbalance':'x2', 'cable_lot_assignment': 'y'})
+sns.scatterplot(data = df, x = 'x1', y = 'x2', hue = 'y')
+plt.show()
+# Обучающий датафрейм
+X_train = df.drop(columns = ['y'])
+y_train =df['y']
+
+# scaler = StandardScaler()
+# X_train = scaler.fit_transform(X_train)
+
+score_train_list = []
+score_test_list = []
+
+for seed in range(100):
+    
+    s = np.random.normal(0, 200, 1)[0] 
+    
+    def shift(row):
+        if row['y'] == 1:
+            return row['x1'] + s
+        else:
+            return row['x1']
+    # Датафрейм для прогноза (тестовый), получается из обучающего параллельным переносом.
+    df_test = df.copy()
+    df_test['x1'] = df_test.apply(shift, axis=1)
+                               
+    X_test = df_test.drop(columns = ['y'])
+    y_test =df_test['y']
+    
+    # Мало соседей, голоса равноправные
+    model = KNeighborsClassifier(n_neighbors = 5, weights='uniform')
+    model.fit(X_train, y_train)
+
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    score_train = accuracy_score(y_train, y_train_pred)
+    score_test = accuracy_score(y_test, y_test_pred)
+
+    score_train_list.append(score_train)
+    score_test_list.append(score_test)
+    
+# Набор accuracy на test't на всех запусках
+uniform = score_test_list
+    
+uni_accuracy_train = round(np.array(score_train_list).mean(), 4)
+uni_accuracy_test = round(np.array(score_test_list).mean(), 4)
+
+# Характеристики прогноза
+print('uniform')
+print('accuracy_train =', uni_accuracy_train)
+print('accuracy_test =', uni_accuracy_test)
+print('accuracy_std =', round(np.array(uniform).std(), 4))
+print('')
+
+# Все заново для дургого голосования
+score_train_list = []
+score_test_list = []
+
+for seed in range(100):
+    
+    s = np.random.normal(0, 200, 1)[0] 
+
+    def shift(row):
+        if row['y'] == 1:
+            return row['x1'] + s
+        else:
+            return row['x1']
+    
+    df_test = df.copy()
+    df_test['x1'] = df_test.apply(shift, axis=1)
+                               
+    X_test = df_test.drop(columns = ['y'])
+    y_test =df_test['y']
+    
+    # Соседей много, голосование взвешенное
+    model = KNeighborsClassifier(n_neighbors = 500, weights='distance')
+    model.fit(X_train, y_train)
+
+    y_train_pred = model.predict(X_train)
+    y_test_pred = model.predict(X_test)
+
+    score_train = accuracy_score(y_train, y_train_pred)
+    score_test = accuracy_score(y_test, y_test_pred)
+
+    score_train_list.append(score_train)
+    score_test_list.append(score_test)
+    
+distance = score_test_list
+    
+dist_accuracy_train = round(np.array(score_train_list).mean(), 4)
+dist_accuracy_test = round(np.array(score_test_list).mean(), 4)
+
+# Характеристики прогоноза
+print('distance')
+print('accuracy_train =', dist_accuracy_train)
+print('accuracy_test =', dist_accuracy_test)
+print('accuracy_std =', round(np.array(distance).std(), 4))
+print('')
+
+print('Прогресс')
+print('delta_accuracy_test =', round(dist_accuracy_test - uni_accuracy_test, 4))
+```
+
+Вот аутпут:
+```output
+uniform
+accuracy_train = 0.8605
+accuracy_test = 0.8
+accuracy_std = 0.0467
+
+distance
+accuracy_train = 1.0
+accuracy_test = 0.9283
+accuracy_std = 0.0493
+
+Прогресс
+delta_accuracy_test = 0.1283
+```
+
+Неплохо так, да? 12% прирост, почти 13%. 
+
+Вопрос 1. Не допускаю ли я логической ошибки? Если показатели первого предиктора с первой линии у меня постоянно пляшут. Должен же я как-то себя проверять, прежде чем применять модель к реально новым кабелям и надеяться на то, что, может, сойдется? Так я хоть какую0то уверенность приобретаю. Тут фишка в том, что сдвиг всегда происходит системный: со всей партией единиц на одну и ту же величину. А при следующем запуске — на другую, но тоже системно. Подумай и скажи.
+
+Вопрос 2. Как ты объяснишь этот эффект? Я про рост среднего скора. И как ты объяснишь, что дисперсия скора не изменяется?
